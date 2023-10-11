@@ -117,7 +117,7 @@ func (cmd *Command) runLinter(args []string, opts *LinterOptions, initConfig boo
 		return l.Lint(n, b, nil)
 	}
 
-	return l.LintFiles(args, nil)
+	return l.LintFiles(args, nil, l.check)
 }
 
 type ignorePatternFlags []string

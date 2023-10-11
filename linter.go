@@ -290,7 +290,7 @@ func (l *Linter) LintDir(dir string, project *Project) ([]*Error, error) {
 	// To make output deterministic, sort order of file paths
 	sort.Strings(files)
 
-	return l.LintFiles(files, project)
+	return l.LintFiles(files, project, l.check)
 }
 
 // LintActionDir lints all YAML action files in the given directory recursively.
@@ -316,13 +316,13 @@ func (l *Linter) LintActionDir(dir string, project *Project) ([]*Error, error) {
 	// To make output deterministic, sort order of file paths
 	sort.Strings(files)
 
-	return l.LintActionFiles(files, project)
+	return l.LintFiles(files, project, l.checkAction)
 }
 
 // LintFiles lints YAML workflow files and outputs the errors to given writer. It applies lint
 // rules to all given files. The project parameter can be nil. In the case, a project is detected
 // from the file path.
-func (l *Linter) LintFiles(filepaths []string, project *Project) ([]*Error, error) {
+func (l *Linter) LintFiles(filepaths []string, project *Project, checkFunction CheckFunctionType) ([]*Error, error) {
 	n := len(filepaths)
 	switch n {
 	case 0:
@@ -383,7 +383,7 @@ func (l *Linter) LintFiles(filepaths []string, project *Project) ([]*Error, erro
 					w.path = r // Use relative path if possible
 				}
 			}
-			errs, err := l.check(w.path, src, proj, proc, ac, rwc)
+			errs, err := checkFunction(w.path, src, proj, proc, ac, rwc)
 			if err != nil {
 				return fmt.Errorf("fatal error while checking %s: %w", w.path, err)
 			}
@@ -429,115 +429,115 @@ func (l *Linter) LintFiles(filepaths []string, project *Project) ([]*Error, erro
 	return all, nil
 }
 
-// LintActionFiles lints YAML workflow files and outputs the errors to given writer. It applies lint
-// rules to all given files. The project parameter can be nil. In the case, a project is detected
-// from the file path.
-func (l *Linter) LintActionFiles(filepaths []string, project *Project) ([]*Error, error) {
-	n := len(filepaths)
-	// switch n {
-	// case 0:
-	// 	return []*Error{}, nil
-	// case 1:
-	// 	return l.LintActionFile(filepaths[0], project)
-	// }
+// // LintFiles lints YAML workflow and action files and outputs the errors to given writer. It applies lint
+// // rules to all given files. The project parameter can be nil. In the case, a project is detected
+// // from the file path.
+// func (l *Linter) LintFiles(filepaths []string, project *Project, checkFunction CheckFunctionType) ([]*Error, error) {
+// 	n := len(filepaths)
+// 	// switch n {
+// 	// case 0:
+// 	// 	return []*Error{}, nil
+// 	// case 1:
+// 	// 	return l.LintActionFile(filepaths[0], project)
+// 	// }
 
-	l.log("Linting", n, "action files")
+// 	l.log("Linting", n, "action files")
 
-	cwd := l.cwd
-	proc := newConcurrentProcess(runtime.NumCPU())
-	sema := semaphore.NewWeighted(int64(runtime.NumCPU()))
-	ctx := context.Background()
-	dbg := l.debugWriter()
-	acf := NewLocalActionsCacheFactory(dbg)
-	rwcf := NewLocalReusableWorkflowCacheFactory(cwd, dbg)
+// 	cwd := l.cwd
+// 	proc := newConcurrentProcess(runtime.NumCPU())
+// 	sema := semaphore.NewWeighted(int64(runtime.NumCPU()))
+// 	ctx := context.Background()
+// 	dbg := l.debugWriter()
+// 	acf := NewLocalActionsCacheFactory(dbg)
+// 	rwcf := NewLocalReusableWorkflowCacheFactory(cwd, dbg)
 
-	type workspace struct {
-		path string
-		errs []*Error
-		src  []byte
-	}
+// 	type workspace struct {
+// 		path string
+// 		errs []*Error
+// 		src  []byte
+// 	}
 
-	ws := make([]workspace, 0, len(filepaths))
-	for _, p := range filepaths {
-		ws = append(ws, workspace{path: p})
-	}
+// 	ws := make([]workspace, 0, len(filepaths))
+// 	for _, p := range filepaths {
+// 		ws = append(ws, workspace{path: p})
+// 	}
 
-	eg := errgroup.Group{}
-	for i := range ws {
-		// Each element of ws is accessed by single goroutine so mutex is unnecessary
-		w := &ws[i]
-		proj := project
-		if proj == nil {
-			// This method modifies state of l.projects so it cannot be called in parallel.
-			// Before entering goroutine, resolve project instance.
-			p, err := l.projects.At(w.path)
-			if err != nil {
-				return nil, err
-			}
-			proj = p
-		}
-		ac := acf.GetCache(proj) // #173
-		rwc := rwcf.GetCache(proj)
+// 	eg := errgroup.Group{}
+// 	for i := range ws {
+// 		// Each element of ws is accessed by single goroutine so mutex is unnecessary
+// 		w := &ws[i]
+// 		proj := project
+// 		if proj == nil {
+// 			// This method modifies state of l.projects so it cannot be called in parallel.
+// 			// Before entering goroutine, resolve project instance.
+// 			p, err := l.projects.At(w.path)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 			proj = p
+// 		}
+// 		ac := acf.GetCache(proj) // #173
+// 		rwc := rwcf.GetCache(proj)
 
-		eg.Go(func() error {
-			// Bound concurrency on reading files to avoid "too many files to open" error (issue #3)
-			sema.Acquire(ctx, 1)
-			src, err := os.ReadFile(w.path)
-			sema.Release(1)
-			if err != nil {
-				return fmt.Errorf("could not read %q: %w", w.path, err)
-			}
+// 		eg.Go(func() error {
+// 			// Bound concurrency on reading files to avoid "too many files to open" error (issue #3)
+// 			sema.Acquire(ctx, 1)
+// 			src, err := os.ReadFile(w.path)
+// 			sema.Release(1)
+// 			if err != nil {
+// 				return fmt.Errorf("could not read %q: %w", w.path, err)
+// 			}
 
-			if cwd != "" {
-				if r, err := filepath.Rel(cwd, w.path); err == nil {
-					w.path = r // Use relative path if possible
-				}
-			}
-			errs, err := l.checkAction(w.path, src, proj, proc, ac, rwc)
-			if err != nil {
-				return fmt.Errorf("fatal error while checking %s: %w", w.path, err)
-			}
-			w.src = src
-			w.errs = errs
-			return nil
-		})
-	}
+// 			if cwd != "" {
+// 				if r, err := filepath.Rel(cwd, w.path); err == nil {
+// 					w.path = r // Use relative path if possible
+// 				}
+// 			}
+// 			errs, err := checkFunction(w.path, src, proj, proc, ac, rwc)
+// 			if err != nil {
+// 				return fmt.Errorf("fatal error while checking %s: %w", w.path, err)
+// 			}
+// 			w.src = src
+// 			w.errs = errs
+// 			return nil
+// 		})
+// 	}
 
-	proc.wait()
-	if err := eg.Wait(); err != nil {
-		return nil, err
-	}
+// 	proc.wait()
+// 	if err := eg.Wait(); err != nil {
+// 		return nil, err
+// 	}
 
-	total := 0
-	for i := range ws {
-		total += len(ws[i].errs)
-	}
+// 	total := 0
+// 	for i := range ws {
+// 		total += len(ws[i].errs)
+// 	}
 
-	all := make([]*Error, 0, total)
-	if l.errFmt != nil {
-		temp := make([]*ErrorTemplateFields, 0, total)
-		for i := range ws {
-			w := &ws[i]
-			for _, err := range w.errs {
-				temp = append(temp, err.GetTemplateFields(w.src))
-			}
-			all = append(all, w.errs...)
-		}
-		if err := l.errFmt.Print(l.out, temp); err != nil {
-			return nil, err
-		}
-	} else {
-		for i := range ws {
-			w := &ws[i]
-			l.printErrors(w.errs, w.src)
-			all = append(all, w.errs...)
-		}
-	}
+// 	all := make([]*Error, 0, total)
+// 	if l.errFmt != nil {
+// 		temp := make([]*ErrorTemplateFields, 0, total)
+// 		for i := range ws {
+// 			w := &ws[i]
+// 			for _, err := range w.errs {
+// 				temp = append(temp, err.GetTemplateFields(w.src))
+// 			}
+// 			all = append(all, w.errs...)
+// 		}
+// 		if err := l.errFmt.Print(l.out, temp); err != nil {
+// 			return nil, err
+// 		}
+// 	} else {
+// 		for i := range ws {
+// 			w := &ws[i]
+// 			l.printErrors(w.errs, w.src)
+// 			all = append(all, w.errs...)
+// 		}
+// 	}
 
-	l.log("Found", total, "errors in", n, "action files")
+// 	l.log("Found", total, "errors in", n, "action files")
 
-	return all, nil
-}
+// 	return all, nil
+// }
 
 // LintFile lints one YAML workflow file and outputs the errors to given writer. The project
 // parameter can be nil. In the case, the project is detected from the given path.
@@ -609,6 +609,8 @@ func (l *Linter) Lint(path string, content []byte, project *Project) ([]*Error, 
 	}
 	return errs, nil
 }
+
+type CheckFunctionType func(string, []byte, *Project, *concurrentProcess, *LocalActionsCache, *LocalReusableWorkflowCache) ([]*Error, error)
 
 func (l *Linter) check(
 	path string,

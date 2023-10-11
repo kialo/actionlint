@@ -411,7 +411,7 @@ func TestLinterPathsNotFound(t *testing.T) {
 		filepath.Join(cwd, "this-dir-doesnt-exist", "this-file-doesnt-exist.yaml"), // Absolute file path (parent doesn't exist)
 	}
 
-	_, err = l.LintFiles(paths, nil)
+	_, err = l.LintFiles(paths, nil, l.check)
 	if err == nil {
 		t.Fatal("no error happened")
 	}
@@ -647,7 +647,7 @@ func BenchmarkLintWorkflowFiles(b *testing.B) {
 				}
 				l.defaultConfig = &Config{}
 
-				errs, err := l.LintFiles(bm.files, proj)
+				errs, err := l.LintFiles(bm.files, proj, l.check)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -733,7 +733,7 @@ func BenchmarkExamplesLintFiles(b *testing.B) {
 		}
 		l.defaultConfig = &Config{}
 
-		errs, err := l.LintFiles(files, proj)
+		errs, err := l.LintFiles(files, proj, l.check)
 		if err != nil {
 			b.Fatal(err)
 		}
